@@ -1,0 +1,5 @@
+currentversion = "0.1"
+
+[[place]]
+file = "funcext/__init__.py"
+line-regex = '__version__'

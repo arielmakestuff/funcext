@@ -167,7 +167,8 @@ class Base:
 
     def __call__(self, *args, **kwargs):
         """Enter contexts and then call wrapped function"""
-        state = Namespace(result=None, __func__=self.__func__)
+        state = Namespace(result=None, __func__=self.__func__,
+                          methodtype=self._methodtype, calltype=self._calltype)
         with self._stack as stack:
             enter_context = stack.enter_context
             for priority, cid, context in self._context:

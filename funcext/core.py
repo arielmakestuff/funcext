@@ -12,9 +12,12 @@
 
 
 # Stdlib imports
-from collections import namedtuple
+from contextlib import AbstractContextManager, ExitStack
+from collections import namedtuple, OrderedDict
 from enum import Enum
+from itertools import count
 from types import MethodType as mkmethod
+from .util import Namespace
 
 # Third-party imports
 
@@ -70,6 +73,139 @@ def create_method(methodtype=None):
         methfunc = MakeMethod.mkinstmethod
 
     return RunMethodType(methodtype, methfunc)
+
+
+# ============================================================================
+# Base
+# ============================================================================
+
+
+class BaseManager:
+    """Methods to manage Base objects.
+
+    While normally, these methods ought to be placed as Base methods, the Base
+    namespace needs to keep public attribute names available for decorator use.
+
+    """
+    __slots__ = ('base', )
+
+    def __init__(self, basefunc=None):
+        self.base = basefunc
+
+    def __call__(self, args, kwargs):
+        basefunc = self.base
+        data = basefunc.data
+        categories = data.categories
+        catfunc = self.runcategory
+        addretval = data.setretval
+        data.clear_retvals()
+        for c in categories:
+            addretval(c, catfunc(c, basefunc, args, kwargs))
+        return basefunc.__func__(*args, **kwargs)
+
+    def __contains__(self, cid):
+        return cid in self.base._context
+
+    def __get__(self, obj, objtype):
+        return self.__class__(obj)
+
+    def __iter__(self):
+        return iter(sorted(self.base._context.values()))
+
+    def add(self, context, *, priority=0):
+        """Add a context manager into base"""
+        if not isinstance(context, AbstractContextManager):
+            msg = ('context arg expected {}-like object, '
+                   'got {} object instead'.
+                   format(AbstractContextManager.__name__,
+                          type(context).__name__))
+            raise TypeError(msg)
+
+        base = self.base
+        contextmap = base._contextmap
+        context = base._context
+
+        cid = next(base._idgen)
+        record = (priority, cid, context)
+        contextmap[cid] = record
+        context.append(record)
+        context.sort()
+        return cid
+
+    def remove(self, cid):
+        """Remove context manager"""
+        base = self.base
+        contextmap = base._contextmap
+        context = base._context
+        record = contextmap.pop(cid)
+        context.remove(record)
+        if not context:
+            base._idgen = count()
+
+    @property
+    def options(self):
+        """Return the options dictionary"""
+        return self.base._options
+
+
+class Base:
+    """Base object"""
+    __slots__ = ('__func__', '_idgen', '_context', '_contextmap', '_options',
+                 '_stack')
+
+    # Manager for the Base object
+    __manager__ = BaseManager()
+
+    def __init__(self, func, *, calltype=None, methodtype=None):
+        self.__func__ = func
+        calltype = CallType.function if calltype is None else calltype
+        if not isinstance(calltype, CallType):
+            msg = ('calltype arg expected {} object, got {} object instead'.
+                   format(CallType.__name__, type(calltype).__name__))
+            raise TypeError(msg)
+        methodtype = create_method(methodtype)
+        self._idgen = count()
+        self._context = []
+        self._contextmap = OrderedDict()
+        self._options = dict(calltype=calltype, methodtype=methodtype)
+        self._stack = ExitStack()
+
+    def __call__(self, *args, **kwargs):
+        """Enter contexts and then call wrapped function"""
+        state = Namespace(result=None, __func__=self.__func__)
+        with self._stack as stack:
+            enter_context = stack.enter_context
+            for priority, cid, context in self._context:
+                enter_context(context(state, args, kwargs))
+            state.result = state.__func__(*args, **kwargs)
+        return state.result
+
+    def __get__(self, obj, objtype):
+        """Create method out of the function"""
+        data = self.data
+        methodtype = data.getoption('methodtype')
+        mtype, mfunc = methodtype
+        if (mtype == MethodType.static or
+                (mtype == MethodType.instance and obj is None)):
+            calltype = CallType.function
+        else:
+            calltype = CallType.method
+        data.setoptions(calltype=calltype)
+        return mfunc(self, obj, objtype)
+
+    @classmethod
+    def base(cls, func=None, *, calltype=None, methodtype=None):
+        """Decorator to wrap a function as a base"""
+
+        def wrapfunc(func):
+            """Add corofunc with kwargs"""
+            wrapper = cls(func, calltype=calltype, methodtype=methodtype)
+            return wrapper
+
+        if func is None:
+            return wrapfunc
+
+        return wrapfunc(func)
 
 
 # ============================================================================

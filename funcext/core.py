@@ -140,7 +140,7 @@ class BaseManager:
 
 class Base:
     """Base object"""
-    __slots__ = ('__func__', '_idgen', '_context', '_contextmap', '_stack',
+    __slots__ = ('__func__', '_idgen', '_context', '_contextmap',
                  '_methodtype', '_calltype')
 
     # Manager for the Base object
@@ -163,13 +163,12 @@ class Base:
         self._idgen = count()
         self._context = []
         self._contextmap = OrderedDict()
-        self._stack = ExitStack()
 
     def __call__(self, *args, **kwargs):
         """Enter contexts and then call wrapped function"""
         state = Namespace(result=None, __func__=self.__func__,
                           methodtype=self._methodtype, calltype=self._calltype)
-        with self._stack as stack:
+        with ExitStack() as stack:
             enter_context = stack.enter_context
             for priority, cid, context in self._context:
                 enter_context(context(state, args, kwargs))

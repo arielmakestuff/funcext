@@ -15,6 +15,7 @@
 from contextlib import AbstractContextManager, ExitStack
 from collections import namedtuple, OrderedDict
 from enum import Enum
+from inspect import ismethod
 from itertools import count
 from types import MethodType as mkmethod
 from .util import Namespace
@@ -92,17 +93,6 @@ class BaseManager:
     def __init__(self, basefunc=None):
         self.base = basefunc
 
-    def __call__(self, args, kwargs):
-        basefunc = self.base
-        data = basefunc.data
-        categories = data.categories
-        catfunc = self.runcategory
-        addretval = data.setretval
-        data.clear_retvals()
-        for c in categories:
-            addretval(c, catfunc(c, basefunc, args, kwargs))
-        return basefunc.__func__(*args, **kwargs)
-
     def __contains__(self, cid):
         return cid in self.base._context
 
@@ -150,24 +140,29 @@ class BaseManager:
 
 class Base:
     """Base object"""
-    __slots__ = ('__func__', '_idgen', '_context', '_contextmap', '_options',
-                 '_stack')
+    __slots__ = ('__func__', '_idgen', '_context', '_contextmap', '_stack',
+                 '_methodtype', '_calltype')
 
     # Manager for the Base object
     __manager__ = BaseManager()
 
     def __init__(self, func, *, calltype=None, methodtype=None):
         self.__func__ = func
-        calltype = CallType.function if calltype is None else calltype
+        if ismethod(func):
+            self._calltype = calltype = CallType.method
+            methodtype = (MethodType.cls if isinstance(func.__self__, type)
+                          else MethodType.instance)
+        else:
+            self._calltype = calltype = (CallType.function if calltype is None
+                                         else calltype)
         if not isinstance(calltype, CallType):
             msg = ('calltype arg expected {} object, got {} object instead'.
                    format(CallType.__name__, type(calltype).__name__))
             raise TypeError(msg)
-        methodtype = create_method(methodtype)
+        self._methodtype = create_method(methodtype)
         self._idgen = count()
         self._context = []
         self._contextmap = OrderedDict()
-        self._options = dict(calltype=calltype, methodtype=methodtype)
         self._stack = ExitStack()
 
     def __call__(self, *args, **kwargs):
@@ -182,15 +177,12 @@ class Base:
 
     def __get__(self, obj, objtype):
         """Create method out of the function"""
-        data = self.data
-        methodtype = data.getoption('methodtype')
-        mtype, mfunc = methodtype
+        mtype, mfunc = self._methodtype
+        calltype = self._calltype
         if (mtype == MethodType.static or
                 (mtype == MethodType.instance and obj is None)):
-            calltype = CallType.function
-        else:
-            calltype = CallType.method
-        data.setoptions(calltype=calltype)
+            if calltype != CallType.function:
+                self._calltype = CallType.function
         return mfunc(self, obj, objtype)
 
     @classmethod
